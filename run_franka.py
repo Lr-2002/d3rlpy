@@ -12,7 +12,7 @@ logger_adapter = d3rlpy.logging.CombineAdapterFactory([
    d3rlpy.logging.WanDBAdapterFactory(),
 ])
 
-iql = d3rlpy.algos.IQLConfig(compile_graph=True).create(device="cuda:0")
+iql = d3rlpy.algos.IQLConfig(compile_graph=True, batch_size=4096).create(device="cuda:0")
 
 # train offline
 
@@ -21,7 +21,7 @@ iql = d3rlpy.algos.IQLConfig(compile_graph=True).create(device="cuda:0")
 iql.fit(
     dataset,
     n_steps=1000000,
-    n_steps_per_epoch=1000,
+    n_steps_per_epoch=3000,
     evaluators={
         'environment': d3rlpy.metrics.EnvironmentEvaluator(env), # evaluate with CartPole-v1 environment
     },

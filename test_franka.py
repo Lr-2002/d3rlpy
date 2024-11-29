@@ -14,6 +14,7 @@ def evaluate_model(env, model, n_episodes=1, max_steps=200):
     total_returns = []
     for _ in range(n_episodes):
         observation, info = env.reset()
+        print(observation.shape)
         done = False
         total_reward = 0
         steps = 0

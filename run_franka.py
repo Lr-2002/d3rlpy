@@ -1,45 +1,3 @@
-# import d3rlpy
-# import wandb
-# from gym.wrappers  import RecordVideo
-# # from d3rlpy.logger import WandbLogger
-# from d3rlpy.datasets import get_minari
-# import argparse as arg
-# # get config and use it to choose algorithm in d3rlpy
-#
-# dataset, env = get_minari('D4RL/kitchen/partial-v2')
-# # wandb.init(project='test logger ', name='iql')
-# # wandb_logger = WandbLogger()
-# # prepare algorithm
-# logger_adapter = d3rlpy.logging.CombineAdapterFactory([
-#    d3rlpy.logging.FileAdapterFactory(root_dir="d3rlpy_logs"),
-#    d3rlpy.logging.WanDBAdapterFactory(),
-# ])
-# # iql = d3rlpy.algos.IQLConfig(compile_graph=True, batch_size=4096).create(device="cuda:0")
-# model = d3rlpy.algos.DecisionTransformerConfig(compile_graph=True, batch_size=4096).create(device="cuda:0")
-#
-# # train offline
-#
-# # train online
-# # iql.fit_online(env, n_steps=1000000)
-# model.fit(
-#     dataset,
-#     n_steps=1000000,
-#     n_steps_per_epoch=3000,
-#     evaluators={
-#         'environment': d3rlpy.metrics.EnvironmentEvaluator(env), # evaluate with CartPole-v1 environment
-#     },
-#     logger_adapter=logger_adapter
-# )
-#
-# # ready to control
-# # env = RecordVideo(gym.make("CartPole-v1", render_mode="rgb_array"), './video')
-#
-# # evaluate
-#
-# # iql = d3rlpy.load_learnable('./model_999000.d3')
-# # ans =  d3rlpy.metrics.evaluate_qlearning_with_environment(iql, env, n_trials=100)
-# # print(ans)
-#
 import argparse
 import d3rlpy
 from d3rlpy.logging import CombineAdapterFactory, FileAdapterFactory, WanDBAdapterFactory
@@ -47,7 +5,14 @@ from d3rlpy.metrics import EnvironmentEvaluator
 
 from d3rlpy.datasets import get_minari
 # 获取数据集和环境
-dataset, env = get_minari('D4RL/kitchen/partial-v2')
+import gymnasium_robotics
+import gymnasium as gym
+
+# import minari
+
+# gym.register_envs(gymnasium_robotics)
+
+
 
 # 定义命令行参数解析器
 def parse_args():
@@ -99,6 +64,22 @@ def parse_args():
             default="test_logger",
             help="WandB project name (default: test_logger)"
         )
+        parser.add_argument(
+            "--train",
+            action="store_true",
+            help="Training mode"
+        )
+        parser.add_argument(
+            "--ckpt_path",
+            type=str,
+            default=None,
+            help="Checkpoint path for loading"
+        )
+        parser.add_argument(
+            "--save_video",
+            action="store_true",
+            help="Save video during evaluation"
+        )
         return parser.parse_args()
 
     # 根据配置选择算法
@@ -131,8 +112,7 @@ def choose_algorithm(args):
 # 主函数
 def main():
     args = parse_args()
-
-    # 定义 Logger
+   # 定义 Logger
     logger_adapter = None
     if args.logger:
         logger_adapter = CombineAdapterFactory([
@@ -141,35 +121,97 @@ def main():
         ])
 
     # 初始化算法
-    model = choose_algorithm(args)
+    if args.train:
+        # 如果提供了checkpoint路径，从checkpoint加载
+        from d3rlpy.datasets import get_minari
+        dataset, env = get_minari('D4RL/kitchen/partial-v2', render_mode="rgb_array")
 
-    # 训练离线模型
-    if args.algorithm != "dt":
-        model.fit(
-            dataset,
-            n_steps=args.n_steps,
-            n_steps_per_epoch=args.n_steps_per_epoch,
-            evaluators={
-                "environment": EnvironmentEvaluator(env),
-            },
-            logger_adapter=logger_adapter
-        )
+        if args.ckpt_path:
+            model = d3rlpy.load_learnable(args.ckpt_path)
+        else:
+            model = choose_algorithm(args)
+
+        # 训练离线模型
+        if args.algorithm != "dt":
+            model.fit(
+                dataset,
+                n_steps=args.n_steps,
+                n_steps_per_epoch=args.n_steps_per_epoch,
+                evaluators={
+                    "environment": EnvironmentEvaluator(env),
+                },
+                logger_adapter=logger_adapter
+            )
+        else:
+            model.fit(
+                dataset,
+                n_steps=args.n_steps,
+                n_steps_per_epoch=args.n_steps_per_epoch,
+                logger_adapter=logger_adapter
+            )
+
+        print("Training complete!")
+
+    # 如果是评估模式
     else:
-        model.fit(
-            dataset,
-            n_steps=args.n_steps,
-            n_steps_per_epoch=args.n_steps_per_epoch,
-            logger_adapter=logger_adapter
-        )
+        if not args.ckpt_path:
+            raise ValueError("Must provide checkpoint path for evaluation!")
 
-    print("Training complete!")
+        model = d3rlpy.load_learnable(args.ckpt_path)
 
-    # 如果需要评估模型
-    # Uncomment to load a model and evaluate
-    # model = d3rlpy.load_learnable('./model_999000.d3')
-    # results = d3rlpy.metrics.evaluate_qlearning_with_environment(model, env, n_trials=100)
-    # print(results)
+        # 创建环境用于评估
+        if args.save_video:
+            from gymnasium.wrappers import RecordVideo
+            import gymnasium
+            import numpy as np
+            # env = gymnasium.make('FrankaKitchen-v1', render_mode='rgb_array')
+            env = gym.make('FrankaKitchen-v1', tasks_to_complete=['microwave', 'kettle', 'slide cabinet', 'bottom burner', 'light switch'], render_mode='rgb_array') # 'slide cabinet', 'bottom burner', 'top burner', 'light switch'
+#
+            env = RecordVideo(env, "eval_videos", episode_trigger=lambda x: True)
+
+        # 执行100个episodes的评估，显示每个episode的结果
+        print("\nStarting evaluation...")
+        total_reward = 0
+        for i in range(100):
+            observation, info = env.reset()
+            episode_reward = 0
+            terminated = False
+            truncated = False
+
+            while not (terminated or truncated):
+                # 处理Franka Kitchen环境的观察值
+                obs_basic = observation['observation']
+                obs_microwave = observation['achieved_goal']['microwave']
+                obs_kettle = observation['achieved_goal']['kettle']
+                obs_bottomburner = observation['achieved_goal']['bottom burner']
+                # obs_lightswitch = observation['achieved_goal']['light switch']
+                obs_slidecabinet = observation['achieved_goal']['slide cabinet']
+
+                # 拼接所有观察值
+                obs = np.concatenate([
+                    obs_basic,
+                    obs_microwave,
+                    obs_kettle,
+                    obs_bottomburner,
+                    # obs_lightswitch,
+                    obs_slidecabinet
+                ])
+
+                # 添加batch维度
+                obs = np.expand_dims(obs, axis=0)
+
+                action = model.predict(obs)[0]  # 移除batch维度
+                observation, reward, terminated, truncated, _ = env.step(action)
+                episode_reward += reward
+
+            total_reward += episode_reward
+            print(f"Episode {i+1}/100: Reward = {episode_reward:.2f}, Average so far = {total_reward/(i+1):.2f}")
+
+        print(f"\nEvaluation complete!")
+        print(f"Average reward over 100 episodes: {total_reward/100:.2f}")
+
+        if args.save_video:
+            env.close()
 
 if __name__ == "__main__":
     main()
-
